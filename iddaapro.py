@@ -1104,7 +1104,7 @@ def parse_all_markets(driver, market_keys: set[str] | None = None) -> dict:
                 result["iy0"] = mp.get("x", "")
                 result["iy2"] = mp.get("2", "")
             elif (
-                "alt/ust" in first and "ilk yari" not in first and "1. yari" not in first and "takim" not in first and "ev sahibi" not in first and "deplasman" not in first and "konuk" not in first
+                "alt/ust" in first and "ilk yari" not in first and "1. yari" not in first and "takim" not in first and "ev sahibi" not in first and "deplasman" not in first and "konuk" not in first and "kesin skor" not in first and "skor" not in first
                 and wants(
                     "au_0_5_alt", "au_0_5_ust",
                     "au_1_5_alt", "au_1_5_ust",
@@ -1113,15 +1113,15 @@ def parse_all_markets(driver, market_keys: set[str] | None = None) -> dict:
                     "au_4_5_alt", "au_4_5_ust",
                 )
             ):
-                for t, key in [("0.5", "0_5"), ("1.5", "1_5"), ("2.5", "2_5"), ("3.5", "3_5"), ("4.5", "4_5")]:
-                    if t in first:
-                        mp = opts_map()
-                        for k, v in mp.items():
-                            if "alt" in k:
-                                result[f"au_{key}_alt"] = v
-                            elif "ust" in k:
-                                result[f"au_{key}_ust"] = v
-                        break
+                t = _esik_bul(first)
+                if t and wants(f"au_{_ESIK_KEY[t]}_alt", f"au_{_ESIK_KEY[t]}_ust"):
+                    key = _ESIK_KEY[t]
+                    alt_v, ust_v = _alt_ust_ayikla(opts_map(), t)
+                    # Ayni esikli tekrar bloklari ilk (ana) degeri ezmesin;
+                    # Alt ve Ust ayni bloktan gelmeli
+                    if (alt_v or ust_v) and not result[f"au_{key}_alt"] and not result[f"au_{key}_ust"]:
+                        result[f"au_{key}_alt"] = alt_v
+                        result[f"au_{key}_ust"] = ust_v
             elif ("karsilikli" in first or ("iki takim" in first and "gol" in first)) and wants("kg_var", "kg_yok"):
                 mp = opts_map()
                 for k, v in mp.items():
@@ -1142,18 +1142,18 @@ def parse_all_markets(driver, market_keys: set[str] | None = None) -> dict:
                     elif k == "x": result["hnd2_x"] = result["hnd2_x"] or v
                     elif k == "2" or "-" in k: result["hnd2_2"] = result["hnd2_2"] or v
             elif (
-                ("ilk yari" in first or "1. yari" in first) and ("alt" in first or "ust" in first) and "sonucu" not in first
+                ("ilk yari" in first or "1. yari" in first) and ("alt" in first or "ust" in first) and "sonucu" not in first and "skor" not in first
                 and wants("iy_au_05_alt", "iy_au_05_ust", "iy_au_15_alt", "iy_au_15_ust")
             ):
-                for t, key in [("0.5", "05"), ("1.5", "15")]:
-                    if t in first:
-                        mp = opts_map()
-                        for k, v in mp.items():
-                            if "alt" in k:
-                                result[f"iy_au_{key}_alt"] = v
-                            elif "ust" in k:
-                                result[f"iy_au_{key}_ust"] = v
-                        break
+                t = _esik_bul(first)
+                key = {"0.5": "05", "1.5": "15"}.get(t, "")
+                if key and wants(f"iy_au_{key}_alt", f"iy_au_{key}_ust"):
+                    alt_v, ust_v = _alt_ust_ayikla(opts_map(), t)
+                    # Tekrarlanan bloklar ilk (ana) degeri ezmesin; Alt ve Ust
+                    # ayni bloktan gelmeli
+                    if (alt_v or ust_v) and not result[f"iy_au_{key}_alt"] and not result[f"iy_au_{key}_ust"]:
+                        result[f"iy_au_{key}_alt"] = alt_v
+                        result[f"iy_au_{key}_ust"] = ust_v
             elif ("ilk yari" in first or "1. yari" in first) and "mac sonucu" in first and wants(
                 "iy_ms_1_1", "iy_ms_1_x", "iy_ms_1_2",
                 "iy_ms_x_1", "iy_ms_x_x", "iy_ms_x_2",
@@ -1236,6 +1236,53 @@ def _bs4_opt_map(item_el):
                 break
     return mp
 
+_ESIK_KEY = {'0.5': '0_5', '1.5': '1_5', '2.5': '2_5', '3.5': '3_5', '4.5': '4_5'}
+
+
+def _esik_bul(first: str) -> str:
+    """Market basligindaki gol esigini bul ('2.5' gibi).
+
+    Baslikta TEK bir esik olmali. Birden fazla sayi varsa (orn. kesin skor
+    tablosu '1.5 / 2.5 / 3.5') hangi esige ait oldugu belirsizdir -> '' doner,
+    boylece yanlis sutuna yazilmaz.
+    """
+    bulunan = re.findall(r'\d+\.5', first)
+    benzersiz = set(bulunan)
+    if len(benzersiz) != 1:
+        return ''
+    th = bulunan[0]
+    return th if th in _ESIK_KEY else ''
+
+
+def _alt_ust_ayikla(mp: dict, th: str) -> tuple:
+    """Option haritasindan Alt/Ust oranlarini guvenle ayikla.
+
+    'alt' in k gibi gevsek eslesme kesin skor/coklu satirli marketlerde
+    alakasiz secenekleri ('2-1 alt' vb.) yakalayip dogru degeri eziyordu.
+    Burada etiket TAM olarak 'alt'/'ust' olmali ya da yalnizca kendi esigiyle
+    birlikte gelmeli ('2.5 alt'). Ayrica oran makul aralikta olmali.
+    """
+    def _makul(v: str) -> bool:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return False
+        return 1.01 <= f <= 15.0
+
+    alt_v = ust_v = ''
+    for k, v in mp.items():
+        # Etiketteki esigi ve bosluklari sadelestir
+        kk = k.replace(th, ' ').strip()
+        kk = ' '.join(kk.split())
+        if kk in ('alt', 'a'):
+            if not alt_v and _makul(v):
+                alt_v = v
+        elif kk in ('ust', 'u'):
+            if not ust_v and _makul(v):
+                ust_v = v
+    return alt_v, ust_v
+
+
 def _parse_markets_bs4(html: str, market_keys: set | None = None) -> dict:
     result = {
         'ms_kodu':'', 'ms1':'', 'ms0':'', 'ms2':'',
@@ -1303,14 +1350,20 @@ def _parse_markets_bs4(html: str, market_keys: set | None = None) -> dict:
             elif (('ilk yari' in first or '1. yari' in first or 'ilk yarı' in first or '1. yarı' in first) and 'sonucu' in first and 'mac' not in first and '/' not in first) and wants('iy1', 'iy0', 'iy2'):
                 mp = _bs4_opt_map(item)
                 result['iy1']=mp.get('1',''); result['iy0']=mp.get('x',''); result['iy2']=mp.get('2','')
-            elif 'alt/ust' in first and 'ilk yari' not in first and '1. yari' not in first and 'takim' not in first and 'ev sahibi' not in first and 'deplasman' not in first and 'konuk' not in first:
-                for th,key in [('0.5','0_5'),('1.5','1_5'),('2.5','2_5'),('3.5','3_5'),('4.5','4_5')]:
-                    if th in first and wants(f'au_{key}_alt',f'au_{key}_ust'):
-                        mp = _bs4_opt_map(item)
-                        for k,v in mp.items():
-                            if 'alt' in k: result[f'au_{key}_alt']=v
-                            elif 'ust' in k: result[f'au_{key}_ust']=v
-                        break
+            elif 'alt/ust' in first and 'ilk yari' not in first and '1. yari' not in first and 'takim' not in first and 'ev sahibi' not in first and 'deplasman' not in first and 'konuk' not in first and 'kesin skor' not in first and 'skor' not in first:
+                th = _esik_bul(first)
+                if th and wants(f'au_{_ESIK_KEY[th]}_alt', f'au_{_ESIK_KEY[th]}_ust'):
+                    key = _ESIK_KEY[th]
+                    mp = _bs4_opt_map(item)
+                    alt_v, ust_v = _alt_ust_ayikla(mp, th)
+                    # Mackolik ayni esigi birden fazla blokta gosterebiliyor
+                    # (farkli MBS/bahis tipleri). ILK blok ana markettir;
+                    # sonrakiler dogru degeri EZMEMELI. Alt ve Ust AYNI bloktan
+                    # gelmeli, yoksa iki farkli market karisir (biri '-' ise
+                    # digerini sonraki bloktan tamamlama).
+                    if (alt_v or ust_v) and not result[f'au_{key}_alt'] and not result[f'au_{key}_ust']:
+                        result[f'au_{key}_alt'] = alt_v
+                        result[f'au_{key}_ust'] = ust_v
             elif ('karsilikli' in first or ('iki takim' in first and 'gol' in first)) and wants('kg_var','kg_yok'):
                 mp = _bs4_opt_map(item)
                 for k,v in mp.items():
@@ -1322,14 +1375,17 @@ def _parse_markets_bs4(html: str, market_keys: set | None = None) -> dict:
             elif ('handikap' in first or 'hnd' in first) and ('+1' in first or '1:0' in first) and wants('hnd2_1','hnd2_x','hnd2_2'):
                 mp = _bs4_opt_map(item)
                 result['hnd2_1']=mp.get('1',''); result['hnd2_x']=mp.get('x',''); result['hnd2_2']=mp.get('2','')
-            elif ('ilk yari' in first or '1. yari' in first) and ('alt' in first or 'ust' in first) and 'sonucu' not in first:
-                for th,key in [('0.5','05'),('1.5','15')]:
-                    if th in first and wants(f'iy_au_{key}_alt',f'iy_au_{key}_ust'):
-                        mp = _bs4_opt_map(item)
-                        for k,v in mp.items():
-                            if 'alt' in k: result[f'iy_au_{key}_alt']=v
-                            elif 'ust' in k: result[f'iy_au_{key}_ust']=v
-                        break
+            elif ('ilk yari' in first or '1. yari' in first) and ('alt' in first or 'ust' in first) and 'sonucu' not in first and 'skor' not in first:
+                th = _esik_bul(first)
+                key = {'0.5': '05', '1.5': '15'}.get(th, '')
+                if key and wants(f'iy_au_{key}_alt', f'iy_au_{key}_ust'):
+                    mp = _bs4_opt_map(item)
+                    alt_v, ust_v = _alt_ust_ayikla(mp, th)
+                    # Tekrarlanan bloklar ilk (ana) degeri ezmesin; Alt ve Ust
+                    # ayni bloktan gelmeli
+                    if (alt_v or ust_v) and not result[f'iy_au_{key}_alt'] and not result[f'iy_au_{key}_ust']:
+                        result[f'iy_au_{key}_alt'] = alt_v
+                        result[f'iy_au_{key}_ust'] = ust_v
             elif ('ilk yari' in first or '1. yari' in first) and 'mac sonucu' in first:
                 mp = _bs4_opt_map(item)
                 combos = {'1/1':'iy_ms_1_1','1/x':'iy_ms_1_x','1/2':'iy_ms_1_2','x/1':'iy_ms_x_1','x/x':'iy_ms_x_x','x/2':'iy_ms_x_2','2/1':'iy_ms_2_1','2/x':'iy_ms_2_x','2/2':'iy_ms_2_2'}
@@ -1364,16 +1420,78 @@ def _parse_markets_bs4(html: str, market_keys: set | None = None) -> dict:
             continue
     return result
 
-def _row_is_valid(r: dict) -> bool:
-    """Maç satırı geçerli mi? Skor ve oran verisi zorunlu."""
+def _row_is_valid(r: dict, market_keys: set | None = None) -> bool:
+    """Maç satırı geçerli mi? Skor ve oran verisi zorunlu. (GECMIS maclar icin)"""
     # IY skoru ve MS skoru mutlaka olmalı
     iy = (r.get('ilk_yari_skor') or '').strip()
     ms = (r.get('mac_skoru') or '').strip()
     if not iy or not ms:
         return False
-    # En az temel oranlardan biri olmalı
-    has_odds = any(r.get(k) for k in ('ms1', 'ms0', 'ms2'))
+    # Secili oran alanlarindan en az biri dolu olmali
+    has_odds = any(r.get(k) for k in _gecerlilik_keys(market_keys))
     return has_odds
+
+
+def _gecerlilik_keys(market_keys: set | None) -> tuple:
+    """Satirin dolu olup olmadigini olcecek oran alanlari.
+
+    Ayarlardan orn. sadece 'Alt/Ust 2.5' secildiyse ms1/ms0/ms2 hic parse
+    EDILMEZ; o yuzden gecerlilik kontrolu MS oranlarina sabitlenemez, yoksa
+    tum satirlar elenir. Secim varsa secilen alanlara bakilir.
+    """
+    if market_keys:
+        secili = tuple(k for k in KEYS[8:] if k in market_keys)
+        if secili:
+            return secili
+    return ('ms1', 'ms0', 'ms2')
+
+
+def _row_is_valid_gunluk(r: dict, market_keys: set | None = None) -> bool:
+    """Gunluk bulten satiri gecerli mi? (BASLAMAMIS maclar icin)
+
+    Gecmis maclarin aksine skor BEKLENMEZ - mac henuz oynanmadigi icin
+    skor alanlari bos olur. Sadece oran verisi zorunludur.
+    """
+    return any(r.get(k) for k in _gecerlilik_keys(market_keys))
+
+
+def _skor_var_mi(value: str) -> bool:
+    """Skor alani gercek bir skor iceriyor mu?
+
+    Mackolik oynanmamis maclarda skor alanlarini bos birakmaz; '-' veya 'IY'
+    gibi dolgu degerler koyar. Gercek skor en az bir rakam icerir (orn '2-1').
+    """
+    v = (value or '').strip()
+    if not v:
+        return False
+    return any(ch.isdigit() for ch in v)
+
+
+def _mac_baslamis_mi(r: dict, current_date: dt.date, now: dt.datetime = None) -> bool:
+    """Mac baslamis/bitmis mi? Gunluk bultende bunlar haric tutulur.
+
+    Iki sinyal kullanilir:
+      1. Gercek skor varsa mac baslamistir (kesin sinyal)
+      2. Mac saati gecmisse baslamistir (bugun icin saat karsilastirmasi)
+    """
+    # 1) Gercek skor varsa mac oynanmis/oynaniyor demektir
+    if _skor_var_mi(r.get('mac_skoru')) or _skor_var_mi(r.get('ilk_yari_skor')):
+        return True
+
+    # 2) Sadece BUGUN icin saat kontrolu (gelecek gunler her zaman baslamamis)
+    now = now or dt.datetime.now()
+    if current_date != now.date():
+        return current_date < now.date()
+
+    saat = (r.get('mac_saati') or '').strip()
+    if not saat:
+        return False  # saat bilinmiyorsa eleme, kullanici gorsun
+    try:
+        hh, mm = saat.split(':')[:2]
+        mac_dt = dt.datetime.combine(current_date, dt.time(int(hh), int(mm)))
+        return mac_dt <= now
+    except (ValueError, TypeError):
+        return False
 
 # Adaptive throttle: 502/500 alınca tüm thread'ler yavaşlar, düzelince hızlanır
 _throttle_delay = 0.02          # başlangıç: 20ms (agresif hız)
@@ -1903,7 +2021,9 @@ class IddaaProApp:
                                bd=0, highlightthickness=0, pady=7)
         btn_gunluk.bind("<Enter>", lambda e: btn_gunluk.configure(bg="#1E88E5"))
         btn_gunluk.bind("<Leave>", lambda e: btn_gunluk.configure(bg="#1565C0"))
-        _Tooltip(btn_gunluk, "Bug\u00fcn\u00fcn ma\u00e7lar\u0131n\u0131 \u00e7ek (g\u00fcnl\u00fck b\u00fclten)")
+        _Tooltip(btn_gunluk,
+                 "Se\u00e7ilen tarih aral\u0131\u011f\u0131ndaki ba\u015flamam\u0131\u015f ma\u00e7lar\u0131 \u00e7ek "
+                 "(g\u00fcnl\u00fck b\u00fclten \u2014 bug\u00fcn ve sonras\u0131)")
         btn_gunluk.grid(row=1, column=0, columnspan=2, pady=(0, 4), sticky="ew")
 
         self._btn(frm_veri, "\u23f9  \u0130PTAL", self._iptal, CLR_BTN_R, 12,
@@ -2332,20 +2452,52 @@ class IddaaProApp:
         if self._thread and self._thread.is_alive():
             messagebox.showwarning("Uyar\u0131", "Zaten \u00e7al\u0131\u015f\u0131yor.")
             return
+        # Gunluk bulten takvimdeki tarih araligini kullanir; boylece kullanici
+        # bugun + yarin gibi cok gunluk bulten cekebilir. Gecmis tarihler
+        # buraya uymaz (oynanmis maclar elenir), o yuzden bugune cekilir.
+        today = dt.date.today()
+        start = self._start_cal.get_date()
+        end = self._end_cal.get_date()
+        if start > end:
+            messagebox.showerror("Hata", "Başlangıç tarihi bitiş tarihinden büyük olamaz.")
+            return
+        if end < today:
+            messagebox.showerror(
+                "Hata",
+                "Günlük bülten geçmiş tarihler için çalışmaz.\n"
+                "Bitiş tarihini bugün veya sonrası seçin.\n"
+                "Geçmiş maçlar için 'GEÇMİŞ MAÇLARI ÇEK' butonunu kullanın."
+            )
+            return
+        if start < today:
+            # Takvimin varsayilan baslangici cok eski (2021); bugune cek.
+            start = today
+
         self._yenile()
         self._stop_flag.clear()
         self._thread = threading.Thread(
             target=self._scrape_gunluk_worker,
+            args=(start, end),
             daemon=True
         )
         self._thread.start()
         self._progress.start(10)
 
-    def _scrape_gunluk_worker(self):
-        start = self._start_cal.get_date()
-        end = self._end_cal.get_date()
+    def _scrape_gunluk_worker(self, start: dt.date = None, end: dt.date = None):
+        # Takvimden gelen tarih araligi kullanilir (varsayilan: bugun).
+        # Gecmis gunler _start_gunluk icinde elendigi icin burada start >= bugun.
+        if start is None:
+            start = dt.date.today()
+        if end is None or end < start:
+            end = start
         total_days = (end - start).days + 1
-        print(f'Günlük maçlar çekiliyor: {start:%d.%m.%Y} - {end:%d.%m.%Y} ({total_days} gün)')
+        now = dt.datetime.now()
+        if total_days == 1:
+            print(f'Günlük maçlar çekiliyor: {start:%d.%m.%Y} (başlamamış maçlar)')
+        else:
+            print(f'Günlük maçlar çekiliyor: {start:%d.%m.%Y} - {end:%d.%m.%Y} '
+                  f'({total_days} gün, başlamamış maçlar)')
+        atlanan_baslamis = 0
         self._set_status('Tarayıcı açılıyor...')
         try:
             driver = build_driver(headless=True)
@@ -2363,6 +2515,8 @@ class IddaaProApp:
 
             lig_filtre = self._sel_leagues if self._sel_leagues is not None else _get_all_league_keys()
             mkt_filtre = self._sel_markets
+            # Secili oran alanlari: satirin dolu olup olmadigi bunlara bakilir
+            gecerlilik_keys = _gecerlilik_keys(mkt_filtre)
 
             for day_idx in range(total_days):
                 if self._stop_flag.is_set():
@@ -2380,21 +2534,26 @@ class IddaaProApp:
 
                 onceki = len(summaries)
                 filtered = []
-                no_lig_count = 0
+                kupa_count = 0
                 for s in summaries:
                     lk = (s.get('lig_key') or '').strip()
                     if lk:
                         if lig_filtreli_key(lk, lig_filtre):
                             filtered.append(s)
                     else:
+                        # Lig bilgisi YOK: Mackolik UEFA kupa maclari (Sampiyonlar/
+                        # Avrupa/Konferans Ligi) icin puan durumu linki vermiyor,
+                        # bu yuzden lig_key bos kaliyor. Gunluk bultende bu maclar
+                        # ATILMAZ - genelde gunun en onemli maclari bunlardir.
                         if lig_filtreli(s.get('iddaa_link', ''), lig_filtre):
                             filtered.append(s)
                         else:
-                            no_lig_count += 1
+                            filtered.append(s)
+                            kupa_count += 1
                 summaries = filtered
                 atlanan = onceki - len(summaries)
-                if no_lig_count:
-                    print(f'  [{current_date:%d.%m.%Y}] {no_lig_count} maçta lig bilgisi yok, atlandı', flush=True)
+                if kupa_count:
+                    print(f'  [{current_date:%d.%m.%Y}] {kupa_count} kupa/lig bilgisi olmayan mac DAHIL edildi', flush=True)
                 print(f'  [{current_date:%d.%m.%Y}] Lig filtresi: {onceki} → {len(summaries)} maç ({atlanan} atlandı)', flush=True)
                 self._set_status(f'[{day_idx+1}/{total_days}] {current_date:%d.%m.%Y} - {len(summaries)} maç | {atlanan} atlandı')
 
@@ -2413,11 +2572,15 @@ class IddaaProApp:
                             break
                         try:
                             r = fut.result()
-                            has_odds = any(r.get(k) for k in ('ms1','ms0','ms2','au_2_5_alt','au_2_5_ust','kg_var'))
+                            has_odds = any(r.get(k) for k in gecerlilik_keys)
                             if not has_odds:
                                 retry_selenium.append(futures[fut])
                                 continue
-                            if not _row_is_valid(r):
+                            # Baslamis/bitmis maclari gunluk biltene alma
+                            if _mac_baslamis_mi(r, current_date, now):
+                                atlanan_baslamis += 1
+                                continue
+                            if not _row_is_valid_gunluk(r, mkt_filtre):
                                 continue
                             self._rows.append(r)
                             total += 1
@@ -2440,7 +2603,10 @@ class IddaaProApp:
                                 break
                             try:
                                 r = fut.result()
-                                if not _row_is_valid(r):
+                                if _mac_baslamis_mi(r, current_date, now):
+                                    atlanan_baslamis += 1
+                                    continue
+                                if not _row_is_valid_gunluk(r, mkt_filtre):
                                     continue
                                 self._rows.append(r)
                                 total += 1
@@ -2461,7 +2627,10 @@ class IddaaProApp:
                                 r = scrape_match(driver, s, self._stop_flag, match_date=current_date, market_keys=mkt_filtre)
                                 if self._stop_flag.is_set():
                                     break
-                                if not _row_is_valid(r):
+                                if _mac_baslamis_mi(r, current_date, now):
+                                    atlanan_baslamis += 1
+                                    continue
+                                if not _row_is_valid_gunluk(r, mkt_filtre):
                                     continue
                                 self._rows.append(r)
                                 total += 1
@@ -2481,7 +2650,13 @@ class IddaaProApp:
             if self._stop_flag.is_set():
                 self._set_status(f"İptal edildi - {total} mac", total)
             else:
-                self._set_status(f"Tamamlandı - {total} mac ({total_days} gün)", total)
+                if atlanan_baslamis:
+                    print(f'  {atlanan_baslamis} mac baslamis/bitmis oldugu icin atlandi', flush=True)
+                    self._set_status(
+                        f"Tamamlandı - {total} baslamamis mac "
+                        f"({atlanan_baslamis} baslamis mac atlandi)", total)
+                else:
+                    self._set_status(f"Tamamlandı - {total} baslamamis mac", total)
 
     def _scrape_worker(self, start: dt.date, end: dt.date):
         print(f'Scraper başladı: {start:%d.%m.%Y} - {end:%d.%m.%Y}')
@@ -2500,6 +2675,8 @@ class IddaaProApp:
         # Tumunu Sec = None → tanimli ligleri kullan (Cezayir/Fas/Misir vb. atlanir)
         lig_filtre = self._sel_leagues if self._sel_leagues is not None else _get_all_league_keys()
         mkt_filtre = self._sel_markets
+        # Secili oran alanlari: satirin dolu olup olmadigi bunlara bakilir
+        gecerlilik_keys = _gecerlilik_keys(mkt_filtre)
         total = 0
 
         def _ensure_driver():
@@ -2619,12 +2796,12 @@ class IddaaProApp:
                                 print(f'  [{cur:%d.%m.%Y}] Detay: {done_count}/{len(summaries)} tamamlandı', flush=True)
                             # Lig filtresi onceden uygulandi, tekrar kontrol gereksiz
                             # Oran verisi bos mu kontrol — bossa Selenium'a birak
-                            has_odds = any(r.get(k) for k in ('ms1','ms0','ms2','au_2_5_alt','au_2_5_ust','kg_var'))
+                            has_odds = any(r.get(k) for k in gecerlilik_keys)
                             if not has_odds:
                                 no_odds_count += 1
                                 retry_selenium.append(futures[fut])
                                 continue
-                            if not _row_is_valid(r):
+                            if not _row_is_valid(r, mkt_filtre):
                                 invalid_count += 1
                                 continue
                             self._rows.append(r)
@@ -2652,7 +2829,7 @@ class IddaaProApp:
                                 break
                             try:
                                 r = fut.result()
-                                if not _row_is_valid(r):
+                                if not _row_is_valid(r, mkt_filtre):
                                     continue
                                 self._rows.append(r)
                                 total += 1
@@ -2674,7 +2851,7 @@ class IddaaProApp:
                                 r = scrape_match(driver, s, self._stop_flag, match_date=cur, market_keys=mkt_filtre)
                                 if self._stop_flag.is_set():
                                     break
-                                if not _row_is_valid(r):
+                                if not _row_is_valid(r, mkt_filtre):
                                     continue
                                 self._rows.append(r)
                                 total += 1

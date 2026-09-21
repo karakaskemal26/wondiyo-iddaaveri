@@ -10,3 +10,17 @@ node_modules/
 package-lock.json
 images.ico
 images.jpg
+
+# Cikti dosyalari (Excel/CSV) - repoya girmesin
+output/
+*.xlsx
+*.csv
+
+# Editor ayarlari
+.claude/
+
+# Gizli anahtarlar
+.env
+.env.*
+*.key
+*serviceAccount*.json

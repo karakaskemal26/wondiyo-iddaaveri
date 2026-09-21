@@ -214,6 +214,7 @@ def main():
         (OUTPUT_DIR / "eksik_2018_12_2019_07.xlsx",     "eksik-3"),
         # Guncel donem
         (OUTPUT_DIR / "guncel_2026_03_2026_05.xlsx",    "guncel"),
+        (OUTPUT_DIR / "guncel_2026_05_bugun.xlsx",       "guncel-bugun"),
     ]
 
     # 2010-2016 expand sezonlari varsa ekle
