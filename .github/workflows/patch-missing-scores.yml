@@ -48,7 +48,7 @@ jobs:
             # Hala yoksa ham xlsx'i dene
             if [ ! -f output/iddaagecmismaclar_clean.xlsx ]; then
               curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                -L "https://raw.githubusercontent.com/camelbox27-lab/iddaaveri/main/output/iddaagecmismaclar_clean.xlsx" \
+                -L "https://raw.githubusercontent.com/karakaskemal26/wondiyo-iddaaveri/main/output/iddaagecmismaclar_clean.xlsx" \
                 -o output/iddaagecmismaclar_clean.xlsx 2>/dev/null || true
             fi
             ls -lh output/ || true
